@@ -1818,6 +1818,8 @@ bool command_event_load_auto_state(void)
    runloop_state_t *runloop_st     = runloop_state_get_ptr();
    const char *name_savestate      = runloop_st->name.savestate;
    bool ret                        = false;
+   bool must_initialize            = (core_serialization_quirks()
+         & RETRO_SERIALIZATION_QUIRK_MUST_INITIALIZE) != 0;
 
    /* No early save-capability gate here: content_load_state() decides,
     * and an existing .auto state file outranks stale metadata. */
@@ -1839,6 +1841,30 @@ bool command_event_load_auto_state(void)
    if (!path_is_valid(savestate_name_auto))
       return false;
 
+   if (must_initialize
+         && runloop_st->auto_state_load_attempted
+         && !runloop_st->auto_state_load_ready)
+      return false;
+
+   if (     must_initialize
+         && !(runloop_st->flags & RUNLOOP_FLAG_CORE_RUNNING)
+         && !runloop_st->auto_state_load_ready)
+   {
+      if (!runloop_st->auto_state_load_pending)
+      {
+         runloop_st->auto_state_load_pending = true;
+         RARCH_LOG("[State] Auto-loading savestate \"%s\" deferred until after the first core run.\n",
+               savestate_name_auto);
+      }
+      return true;
+   }
+
+   if (must_initialize)
+   {
+      runloop_st->auto_state_load_pending  = false;
+      runloop_st->auto_state_load_attempted = true;
+   }
+
    ret = content_load_state(savestate_name_auto, false, true);
 
    RARCH_LOG("[State] %s \"%s\".\n",
@@ -1847,7 +1873,7 @@ bool command_event_load_auto_state(void)
    RARCH_LOG("[State] %s \"%s\" %s.\n",
          msg_hash_to_str(MSG_AUTOLOADING_SAVESTATE_FROM),
          savestate_name_auto,
-         ret ? "succeeded" : "failed");
+         ret ? "queued" : "failed");
 
    return ret;
 }
