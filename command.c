@@ -1846,9 +1846,7 @@ bool command_event_load_auto_state(void)
          && !runloop_st->auto_state_load_ready)
       return false;
 
-   if (     must_initialize
-         && !(runloop_st->flags & RUNLOOP_FLAG_CORE_RUNNING)
-         && !runloop_st->auto_state_load_ready)
+   if (must_initialize && !runloop_st->auto_state_load_ready)
    {
       if (!runloop_st->auto_state_load_pending)
       {
@@ -1873,8 +1871,7 @@ bool command_event_load_auto_state(void)
    RARCH_LOG("[State] %s \"%s\" %s.\n",
          msg_hash_to_str(MSG_AUTOLOADING_SAVESTATE_FROM),
          savestate_name_auto,
-         must_initialize ? (ret ? "queued" : "failed")
-                         : (ret ? "succeeded" : "failed"));
+         ret ? "queued" : "failed");
 
    return ret;
 }

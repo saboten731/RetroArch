@@ -8986,9 +8986,9 @@ static void runloop_load_deferred_auto_state(void)
       return;
    }
 
-   /* The command handler normally defers for a core that has not entered
-    * the run loop yet. Mark this dispatch as ready so the call below uses
-    * the existing state task path exactly once. */
+   /* The command handler defers this core's initial auto-load. Mark this
+    * dispatch as ready so the call below uses the existing state task path
+    * exactly once. */
    runloop_st->auto_state_load_attempted = true;
    runloop_st->auto_state_load_ready     = true;
    command_event_load_auto_state();
