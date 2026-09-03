@@ -1060,20 +1060,24 @@ static void task_load_handler(retro_task_t *task)
    {
       task_free_title(task);
 
-      if (     !((flg & RETRO_TASK_FLG_MUTE) > 0)
-            && !(state->flags & SAVE_TASK_FLAG_AUTOLOAD))
+      if (!((flg & RETRO_TASK_FLG_MUTE) > 0))
       {
          char msg[128];
 
-         if (state->state_slot < 0)
-            strlcpy(msg,
-                  msg_hash_to_str(MSG_LOADED_STATE_FROM_SLOT_AUTO),
-                  sizeof(msg));
+         if (state->flags & SAVE_TASK_FLAG_AUTOLOAD)
+            snprintf(msg, sizeof(msg),
+                  msg_hash_to_str(MSG_AUTOLOADING_SAVESTATE_SUCCEEDED),
+                  path_basename(state->path));
          else
          {
-            snprintf(msg, sizeof(msg),
-                  msg_hash_to_str(MSG_LOADED_STATE_FROM_SLOT),
-                  state->state_slot);
+            if (state->state_slot < 0)
+               strlcpy(msg,
+                     msg_hash_to_str(MSG_LOADED_STATE_FROM_SLOT_AUTO),
+                     sizeof(msg));
+            else
+               snprintf(msg, sizeof(msg),
+                     msg_hash_to_str(MSG_LOADED_STATE_FROM_SLOT),
+                     state->state_slot);
          }
 
          task_set_title(task, strdup(msg));
@@ -1443,49 +1447,15 @@ static void content_load_state_cb(retro_task_t *task,
    if (!ret)
       goto error;
 
-   if (load_data->flags & SAVE_TASK_FLAG_AUTOLOAD)
-   {
-      char msg[128];
-
-      RARCH_LOG("[State] Auto-loading savestate \"%s\" succeeded.\n",
-            load_data->path);
-
-      if (!((load_data->flags & SAVE_TASK_FLAG_MUTE) > 0))
-      {
-         snprintf(msg, sizeof(msg),
-               msg_hash_to_str(MSG_AUTOLOADING_SAVESTATE_SUCCEEDED),
-               path_basename(load_data->path));
-         runloop_msg_queue_push(msg, strlen(msg), 1, 180, true, NULL,
-               MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
-      }
-   }
-
    free(buf);
    free(load_data);
 
    return;
 
 error:
-   if (load_data->flags & SAVE_TASK_FLAG_AUTOLOAD)
-   {
-      RARCH_ERR("[State] Auto-loading savestate \"%s\" failed.\n",
-            load_data->path);
-
-      if (     !task_get_error(task)
-            && !((load_data->flags & SAVE_TASK_FLAG_MUTE) > 0))
-      {
-         char msg[128];
-         snprintf(msg, sizeof(msg),
-               msg_hash_to_str(MSG_AUTOLOADING_SAVESTATE_FAILED),
-               path_basename(load_data->path));
-         runloop_msg_queue_push(msg, strlen(msg), 1, 180, true, NULL,
-               MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_ERROR);
-      }
-   }
-   else
-      RARCH_ERR("[State] %s \"%s\".\n",
-            msg_hash_to_str(MSG_FAILED_TO_LOAD_STATE),
-            load_data->path);
+   RARCH_ERR("[State] %s \"%s\".\n",
+         msg_hash_to_str(MSG_FAILED_TO_LOAD_STATE),
+         load_data->path);
    if (buf)
       free(buf);
    free(load_data);
