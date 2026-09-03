@@ -138,8 +138,8 @@ jobs:
 
           normal_manifest="$artifact_dir/normal-merged-manifest.xmltree.txt"
           autoloadfix_manifest="$artifact_dir/autoloadfix-merged-manifest.xmltree.txt"
-          "$aapt2_bin" dump xmltree "$normal_apk" AndroidManifest.xml | tee "$normal_manifest"
-          "$aapt2_bin" dump xmltree "$autoloadfix_apk" AndroidManifest.xml | tee "$autoloadfix_manifest"
+          "$aapt2_bin" dump xmltree --file AndroidManifest.xml "$normal_apk" | tee "$normal_manifest"
+          "$aapt2_bin" dump xmltree --file AndroidManifest.xml "$autoloadfix_apk" | tee "$autoloadfix_manifest"
 
           grep -F 'com.retroarch.aarch64.autoloadfix.documents' "$autoloadfix_manifest"
           grep -F 'com.retroarch.aarch64.documents' "$normal_manifest"
