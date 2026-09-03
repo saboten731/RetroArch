@@ -5967,6 +5967,8 @@ void runloop_msg_queue_push(
    RUNLOOP_MSG_QUEUE_UNLOCK(runloop_st);
 }
 
+static void runloop_load_deferred_auto_state(void);
+
 #ifdef HAVE_MENU
 /* Display the libretro core's framebuffer onscreen. */
 static bool display_menu_libretro(
@@ -5989,6 +5991,7 @@ static bool display_menu_libretro(
          input_st->flags |= INP_FLAG_BLOCK_LIBRETRO_INPUT;
 
       core_run();
+      runloop_load_deferred_auto_state();
       runloop_st->core_runtime_usec       +=
          runloop_core_runtime_tick(runloop_st, slowmotion_ratio, current_time);
       input_st->flags                     &= ~INP_FLAG_BLOCK_LIBRETRO_INPUT;
@@ -8243,6 +8246,8 @@ int runloop_iterate(void)
          core_run();
    }
 
+   runloop_load_deferred_auto_state();
+
    /* Increment runtime tick counter after each call to
     * core_run() or run_ahead() */
    runloop_st->core_runtime_usec += runloop_core_runtime_tick(
@@ -9063,7 +9068,6 @@ void core_run(void)
    {
       current_core->retro_run();
       audio_driver_frame_end();
-      runloop_load_deferred_auto_state();
    }
 
 #ifdef HAVE_GAME_AI
