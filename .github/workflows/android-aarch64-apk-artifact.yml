@@ -42,8 +42,8 @@ jobs:
         sha256sum "$GITHUB_WORKSPACE/artifact/phoenix-aarch64-debug.apk" \
           | tee "$GITHUB_WORKSPACE/artifact/SHA256SUMS.txt"
         {
-          echo "source_commit=$(git log -1 --format=%H -- command.c)"
-          echo "build_commit=$(git rev-parse HEAD)"
+          echo "source_commit=$(git -C "$GITHUB_WORKSPACE" log -1 --format=%H -- command.c)"
+          echo "build_commit=$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"
           echo "artifact=phoenix-aarch64-debug.apk"
           echo "abi=arm64-v8a"
         } | tee "$GITHUB_WORKSPACE/artifact/build-metadata.txt"
