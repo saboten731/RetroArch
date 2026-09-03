@@ -27,14 +27,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check out exact Mupen64Plus-Next source
-        uses: actions/checkout@v4
-        with:
-          repository: saboten731/mupen64plus-libretro-nx
-          ref: ${{ env.MUPEN_SOURCE_COMMIT }}
-          path: mupen-source
-          fetch-depth: 1
-          persist-credentials: false
+      - name: Fetch exact Mupen64Plus-Next source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init mupen-source
+          git -C mupen-source remote add origin \
+            https://github.com/saboten731/mupen64plus-libretro-nx.git
+          git -C mupen-source fetch --depth 1 origin "$MUPEN_SOURCE_COMMIT"
+          git -C mupen-source checkout --detach FETCH_HEAD
+          test "$(git -C mupen-source rev-parse HEAD)" = "$MUPEN_SOURCE_COMMIT"
 
       - name: Set up JDK 25
         uses: actions/setup-java@v4
