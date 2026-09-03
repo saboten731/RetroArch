@@ -1873,7 +1873,8 @@ bool command_event_load_auto_state(void)
    RARCH_LOG("[State] %s \"%s\" %s.\n",
          msg_hash_to_str(MSG_AUTOLOADING_SAVESTATE_FROM),
          savestate_name_auto,
-         ret ? "queued" : "failed");
+         must_initialize ? (ret ? "queued" : "failed")
+                         : (ret ? "succeeded" : "failed"));
 
    return ret;
 }
