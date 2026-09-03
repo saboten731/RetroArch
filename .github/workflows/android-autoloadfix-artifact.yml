@@ -1,0 +1,249 @@
+name: Android AutoLoad side-by-side artifact
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - artifact/n64-autoload-side-by-side
+
+permissions:
+  contents: read
+
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+  MUPEN_SOURCE_COMMIT: 6e708988a5232001b522d6953e9038d1b8f2072e
+  CORE_INFO_COMMIT: 04b63cc99ce5e6f2881a6c103c0d520a94488da0
+  CORE_FILENAME: mupen64plus_next_gles3_libretro_android.so
+  CORE_INFO_FILENAME: mupen64plus_next_gles3_libretro.info
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out RetroArch source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check out exact Mupen64Plus-Next source
+        uses: actions/checkout@v4
+        with:
+          repository: saboten731/mupen64plus-libretro-nx
+          ref: ${{ env.MUPEN_SOURCE_COMMIT }}
+          path: mupen-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: temurin
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager 'ndk;26.3.11579264' 'ndk;29.0.14206865'
+
+      - name: Build exact arm64-v8a GLES3 Mupen core
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C mupen-source rev-parse HEAD)" = "$MUPEN_SOURCE_COMMIT"
+
+          ndk_dir="$ANDROID_HOME/ndk/26.3.11579264"
+          ndk_build="$ndk_dir/ndk-build"
+          test -x "$ndk_build"
+
+          "$ndk_build" \
+            NDK_PROJECT_PATH="$GITHUB_WORKSPACE/mupen-source" \
+            APP_BUILD_SCRIPT="$GITHUB_WORKSPACE/mupen-source/libretro/jni/Android.mk" \
+            NDK_APPLICATION_MK="$GITHUB_WORKSPACE/mupen-source/libretro/jni/Application.mk" \
+            NDK_OUT="$RUNNER_TEMP/mupen-ndk-out" \
+            NDK_LIBS_OUT="$RUNNER_TEMP/mupen-ndk-libs" \
+            APP_ABI=arm64-v8a \
+            APP_PLATFORM=android-18 \
+            GLES3=1 \
+            -j2
+
+          source_so="$RUNNER_TEMP/mupen-ndk-libs/arm64-v8a/libretro.so"
+          test -f "$source_so"
+
+          core_dir="$GITHUB_WORKSPACE/pkg/android/phoenix/assets-autoloadfix/cores"
+          info_dir="$GITHUB_WORKSPACE/pkg/android/phoenix/assets-autoloadfix/info"
+          mkdir -p "$core_dir" "$info_dir"
+          cp "$source_so" "$core_dir/$CORE_FILENAME"
+
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
+            "https://raw.githubusercontent.com/libretro/libretro-core-info/$CORE_INFO_COMMIT/$CORE_INFO_FILENAME" \
+            --output "$info_dir/$CORE_INFO_FILENAME"
+          grep -Fx 'corename = "mupen64plus_next_gles3"' "$info_dir/$CORE_INFO_FILENAME"
+
+      - name: Build normal reference and side-by-side test APKs
+        shell: bash
+        working-directory: pkg/android/phoenix
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon assembleAarch64Debug assembleAutoloadFixDebug
+
+      - name: Audit packages, manifests, signing, and byte equivalence
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          aapt2_bin="$(find "$ANDROID_HOME/build-tools" -type f -name aapt2 | sort -V | tail -n 1)"
+          apksigner_bin="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -x "$aapt2_bin"
+          test -x "$apksigner_bin"
+
+          normal_apk=''
+          autoloadfix_apk=''
+          while IFS= read -r candidate; do
+            package_line="$("$aapt2_bin" dump badging "$candidate" | grep '^package:')"
+            package_name="$(awk -F"'" '{print $2}' <<< "$package_line")"
+            if [[ "$package_name" == 'com.retroarch.aarch64' ]]; then
+              normal_apk="$candidate"
+            elif [[ "$package_name" == 'com.retroarch.aarch64.autoloadfix' ]]; then
+              autoloadfix_apk="$candidate"
+            fi
+          done < <(find pkg/android/phoenix/build/outputs/apk -type f -name '*.apk' | sort)
+
+          test -n "$normal_apk"
+          test -n "$autoloadfix_apk"
+
+          artifact_dir="$GITHUB_WORKSPACE/artifact"
+          mkdir -p "$artifact_dir"
+          cp "$normal_apk" "$artifact_dir/retroarch-aarch64-reference.apk"
+          cp "$autoloadfix_apk" "$artifact_dir/retroarch-autoloadfix-aarch64.apk"
+
+          normal_badging="$artifact_dir/normal-badging.txt"
+          autoloadfix_badging="$artifact_dir/autoloadfix-badging.txt"
+          "$aapt2_bin" dump badging "$normal_apk" | tee "$normal_badging"
+          "$aapt2_bin" dump badging "$autoloadfix_apk" | tee "$autoloadfix_badging"
+          grep -F "package: name='com.retroarch.aarch64'" "$normal_badging"
+          grep -F "package: name='com.retroarch.aarch64.autoloadfix'" "$autoloadfix_badging"
+          grep -F "application-label:'RetroArch AutoLoad Test'" "$autoloadfix_badging"
+          if grep -F "package: name='com.retroarch.aarch64.autoloadfix'" "$normal_badging"; then
+            echo 'The normal reference APK has the side-by-side package ID.' >&2
+            exit 1
+          fi
+
+          normal_manifest="$artifact_dir/normal-merged-manifest.xmltree.txt"
+          autoloadfix_manifest="$artifact_dir/autoloadfix-merged-manifest.xmltree.txt"
+          "$aapt2_bin" dump xmltree "$normal_apk" AndroidManifest.xml | tee "$normal_manifest"
+          "$aapt2_bin" dump xmltree "$autoloadfix_apk" AndroidManifest.xml | tee "$autoloadfix_manifest"
+
+          grep -F 'com.retroarch.aarch64.autoloadfix.documents' "$autoloadfix_manifest"
+          grep -F 'com.retroarch.aarch64.documents' "$normal_manifest"
+          if grep -F 'com.retroarch.aarch64.documents' "$autoloadfix_manifest"; then
+            echo 'The side-by-side manifest retained the normal provider authority.' >&2
+            exit 1
+          fi
+          if grep -F '${applicationId}' "$autoloadfix_manifest"; then
+            echo 'The side-by-side manifest has an unresolved applicationId placeholder.' >&2
+            exit 1
+          fi
+
+          {
+            echo 'expected_test_application_id=com.retroarch.aarch64.autoloadfix'
+            echo 'expected_test_label=RetroArch AutoLoad Test'
+            echo 'expected_normal_application_id=com.retroarch.aarch64'
+            echo
+            echo '[test_package_and_label]'
+            grep -E "^(package:|application-label:)" "$autoloadfix_badging"
+            echo
+            echo '[provider_authorities]'
+            grep -E 'authorit' "$autoloadfix_manifest" || true
+            echo
+            echo '[permissions_and_package_derived_manifest_names]'
+            grep -E 'permission|com\.retroarch|applicationId' "$autoloadfix_manifest" || true
+            echo
+            echo '[shared_core_query_broadcast_action]'
+            grep -F 'com.retroarch.QUERY_INSTALLED_CORES' "$autoloadfix_manifest" || true
+            echo
+            echo 'provider_authority_collision=NONE'
+            echo 'unresolved_placeholders=NONE'
+            echo 'custom_package_derived_permissions=NONE_IN_SOURCE_MANIFEST'
+          } | tee "$artifact_dir/manifest-collision-audit.txt"
+
+          "$apksigner_bin" verify --verbose --print-certs "$autoloadfix_apk" \
+            | tee "$artifact_dir/autoloadfix-signing-audit.txt"
+
+          native_path='lib/arm64-v8a/libretroarch-activity.so'
+          unzip -Z1 "$normal_apk" | grep -Fx "$native_path"
+          unzip -Z1 "$autoloadfix_apk" | grep -Fx "$native_path"
+          unzip -p "$normal_apk" "$native_path" > "$artifact_dir/libretroarch-activity-normal-arm64.so"
+          unzip -p "$autoloadfix_apk" "$native_path" > "$artifact_dir/libretroarch-activity-autoloadfix-arm64.so"
+
+          if cmp -s \
+              "$artifact_dir/libretroarch-activity-normal-arm64.so" \
+              "$artifact_dir/libretroarch-activity-autoloadfix-arm64.so"; then
+            native_equivalence='MATCH'
+          else
+            native_equivalence='DIFFER'
+          fi
+          test "$native_equivalence" = MATCH
+
+          standalone_core="$artifact_dir/$CORE_FILENAME"
+          cp "pkg/android/phoenix/assets-autoloadfix/cores/$CORE_FILENAME" "$standalone_core"
+          bundled_core="$artifact_dir/mupen64plus_next_gles3_libretro_android-bundled.so"
+          unzip -Z1 "$autoloadfix_apk" | grep -Fx "assets/cores/$CORE_FILENAME"
+          unzip -p "$autoloadfix_apk" "assets/cores/$CORE_FILENAME" > "$bundled_core"
+          unzip -Z1 "$autoloadfix_apk" | grep -Fx "assets/info/$CORE_INFO_FILENAME"
+          unzip -p "$autoloadfix_apk" "assets/info/$CORE_INFO_FILENAME" \
+            > "$artifact_dir/$CORE_INFO_FILENAME"
+
+          if cmp -s "$standalone_core" "$bundled_core"; then
+            core_equivalence='MATCH'
+          else
+            core_equivalence='DIFFER'
+          fi
+          test "$core_equivalence" = MATCH
+
+          {
+            echo "retroarch_functional_source_commit=$(git log -1 --format=%H -- runloop.c)"
+            echo "retroarch_artifact_build_commit=$(git rev-parse HEAD)"
+            echo "mupen_source_commit=$(git -C mupen-source rev-parse HEAD)"
+            echo "core_info_source_commit=$CORE_INFO_COMMIT"
+            echo 'normal_application_id=com.retroarch.aarch64'
+            echo 'side_by_side_application_id=com.retroarch.aarch64.autoloadfix'
+            echo 'side_by_side_label=RetroArch AutoLoad Test'
+            echo 'side_by_side_signing=debug keystore (debug build, unique application ID)'
+            echo "native_frontend_library=$native_path"
+            echo "native_frontend_sha256_comparison=$native_equivalence"
+            echo "bundled_core_sha256_comparison=$core_equivalence"
+            echo "core_filename=$CORE_FILENAME"
+            echo "core_info_filename=$CORE_INFO_FILENAME"
+            echo 'abi=arm64-v8a'
+            echo 'renderer=GLES3'
+            file "$standalone_core"
+          } | tee "$artifact_dir/build-metadata.txt"
+
+          (
+            cd "$artifact_dir"
+            sha256sum \
+              retroarch-autoloadfix-aarch64.apk \
+              retroarch-aarch64-reference.apk \
+              libretroarch-activity-autoloadfix-arm64.so \
+              libretroarch-activity-normal-arm64.so \
+              "$CORE_FILENAME" \
+              mupen64plus_next_gles3_libretro_android-bundled.so \
+              "$CORE_INFO_FILENAME" \
+              | tee SHA256SUMS.txt
+          )
+
+          cat "$artifact_dir/SHA256SUMS.txt" >> "$GITHUB_STEP_SUMMARY"
+          cat "$artifact_dir/build-metadata.txt" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload APK, core, and audit artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: retroarch-autoloadfix-aarch64-${{ github.sha }}
+          path: artifact
+          if-no-files-found: error
