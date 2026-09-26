@@ -32,11 +32,48 @@ jobs:
         java-version: '25'
         distribution: 'temurin'
 
+    - name: Test core backup restore
+      run: |
+        make -C samples/tasks/core_backup clean
+        make -C samples/tasks/core_backup check
+
     - name: Compile RA
       run: |
         cd pkg/android/phoenix
         ./gradlew assembleDebug
         find . -iname "*.apk" -exec ls -l "{}" \;
+
+    - name: Extract and verify arm64 frontend library
+      run: |
+        set -euo pipefail
+
+        mapfile -t apks < <(find pkg/android/phoenix/build/outputs/apk \
+          -type f -name 'phoenix-aarch64-debug.apk' -print)
+        if [[ ${#apks[@]} -ne 1 ]]; then
+          echo "::error::Expected one aarch64 debug APK, found ${#apks[@]}"
+          find pkg/android/phoenix/build/outputs/apk -type f -name '*.apk' -print
+          exit 1
+        fi
+
+        apk="${apks[0]}"
+        entry='lib/arm64-v8a/libretroarch-activity.so'
+        if ! unzip -Z1 "$apk" | awk -v entry="$entry" '$0 == entry { found = 1 } END { exit !found }'; then
+          echo "::error::RetroArch frontend library not found in $apk: $entry"
+          unzip -l "$apk"
+          exit 1
+        fi
+
+        mkdir -p artifacts/retroarch-arm64
+        so='artifacts/retroarch-arm64/libretroarch-activity.so'
+        unzip -p "$apk" "$entry" > "$so"
+        test -s "$so"
+        file "$so"
+        readelf -h "$so" | tee /tmp/retroarch-arm64-elf-header.txt
+        grep -Eq 'Class:[[:space:]]+ELF64' /tmp/retroarch-arm64-elf-header.txt
+        grep -Eq 'Type:[[:space:]]+DYN' /tmp/retroarch-arm64-elf-header.txt
+        grep -Eq 'Machine:[[:space:]]+AArch64' /tmp/retroarch-arm64-elf-header.txt
+        stat -c '%n %s bytes' "$so"
+        sha256sum "$so"
 
     - name: Get short SHA
       id: slug
@@ -48,3 +85,9 @@ jobs:
         path: |
           pkg/android/phoenix/build/outputs/apk/normal/debug/phoenix-normal-debug.apk
           pkg/android/phoenix/build/outputs/apk/aarch64/debug/phoenix-aarch64-debug.apk
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: retroarch-android-arm64-core-restore-fix
+        path: artifacts/retroarch-arm64/libretroarch-activity.so
+        if-no-files-found: error
