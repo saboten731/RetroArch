@@ -32,11 +32,73 @@ jobs:
         java-version: '25'
         distribution: 'temurin'
 
+    - name: Fetch frontend assets
+      run: |
+        set -euo pipefail
+        assets_dir=pkg/android/phoenix/assets
+        rm -rf /tmp/retroarch-assets "$assets_dir"
+        git clone --depth=1 https://github.com/libretro/retroarch-assets.git /tmp/retroarch-assets
+        echo "retroarch-assets commit: $(git -C /tmp/retroarch-assets rev-parse HEAD)"
+        mkdir -p "$assets_dir"
+        cp -a /tmp/retroarch-assets/. "$assets_dir/"
+        rm -rf "$assets_dir/.git"
+
+        for required in ozone xmb fonts; do
+          if [ ! -d "$assets_dir/$required" ]; then
+            echo "Missing required frontend asset directory: $assets_dir/$required" >&2
+            exit 1
+          fi
+        done
+        find "$assets_dir" -maxdepth 2 -type d | sort | sed -n '1,100p'
+
     - name: Compile RA
       run: |
         cd pkg/android/phoenix
         ./gradlew assembleDebug
         find . -iname "*.apk" -exec ls -l "{}" \;
+
+    - name: Verify packaged APK assets
+      run: |
+        set -euo pipefail
+        normal_apk=pkg/android/phoenix/build/outputs/apk/normal/debug/phoenix-normal-debug.apk
+        aarch64_apk=pkg/android/phoenix/build/outputs/apk/aarch64/debug/phoenix-aarch64-debug.apk
+
+        for apk in "$normal_apk" "$aarch64_apk"; do
+          test -s "$apk"
+          echo "Checking $apk"
+          for asset_class in ozone xmb fonts; do
+            count=$(unzip -Z1 "$apk" | awk -v prefix="assets/$asset_class/" 'index($0, prefix) == 1 && substr($0, length($0), 1) != "/" { count++ } END { print count + 0 }')
+            if [ "$count" -eq 0 ]; then
+              echo "No files found under assets/$asset_class/ in $apk" >&2
+              exit 1
+            fi
+            echo "assets/$asset_class files: $count"
+          done
+          ls -lh "$apk"
+          sha256sum "$apk"
+        done
+
+        arm64_count=$(unzip -Z1 "$normal_apk" | awk 'index($0, "lib/arm64-v8a/") == 1 && substr($0, length($0), 1) != "/" { count++ } END { print count + 0 }')
+        if [ "$arm64_count" -eq 0 ]; then
+          echo "No arm64-v8a libraries found in $normal_apk" >&2
+          exit 1
+        fi
+        echo "lib/arm64-v8a files in normal APK: $arm64_count"
+
+        sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+        if [ -n "$sdk_root" ]; then
+          aapt=$(find "$sdk_root/build-tools" -type f -name aapt -print 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -n "$aapt" ]; then
+            app_id=$("$aapt" dump badging "$normal_apk" | awk -F "'" '/^package: name=/ { print $2; exit }')
+            if [ "$app_id" != "com.retroarch" ]; then
+              echo "Unexpected normal APK applicationId: $app_id" >&2
+              exit 1
+            fi
+            echo "Normal APK applicationId: $app_id"
+          else
+            echo "aapt unavailable; applicationId will be verified from the downloaded APK."
+          fi
+        fi
 
     - name: Get short SHA
       id: slug
